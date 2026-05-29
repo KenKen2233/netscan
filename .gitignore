@@ -1,0 +1,35 @@
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+go.work
+
+# Build output
+build/
+dist/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Database
+data/*.db
+data/*.db-wal
+data/*.db-shm
+
+# Wails
+frontend/src/wailsjs/
