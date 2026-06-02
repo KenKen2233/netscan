@@ -1,0 +1,19 @@
+id: phpmyadmin-exposure
+info:
+  name: phpMyAdmin Exposure
+  author: netscan
+  severity: medium
+  tags:
+    - phpmyadmin
+    - database
+    - exposure
+
+requests:
+  - method: GET
+    path: /phpmyadmin/
+    matchers:
+      - type: word
+        words: ["phpMyAdmin"]
+        part: body
+      - type: status
+        status: [200]

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -34,7 +35,14 @@ type DirScanConfig struct {
 	IsStopped  func() bool
 }
 
-// Default wordlist
+// WordlistLevel defines wordlist size levels
+var WordlistLevel = map[string]string{
+	"small":  "assets/wordlists/small.txt",
+	"medium": "assets/wordlists/medium.txt",
+	"large":  "assets/wordlists/large.txt",
+}
+
+// DefaultWordlist is the fallback wordlist (small level)
 var DefaultWordlist = []string{
 	"admin", "login", "wp-admin", "wp-login.php", "administrator", "phpmyadmin",
 	"manager", "console", "api", "v1", "v2", "test", "debug", "config", "backup",
@@ -59,6 +67,22 @@ var DefaultWordlist = []string{
 	"readme.md", "readme.txt", "changelog.md", "license.txt",
 	"1", "2", "3", "test1", "test2", "demo", "example",
 	"www", "home", "main", "default", "index",
+}
+
+// LoadWordlistFromFile loads a wordlist from a file
+func LoadWordlistFromFile(path string) ([]string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var words []string
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" && !strings.HasPrefix(line, "#") {
+			words = append(words, line)
+		}
+	}
+	return words, nil
 }
 
 // DirScan performs directory scanning
