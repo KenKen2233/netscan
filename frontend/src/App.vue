@@ -3,7 +3,7 @@
     <!-- Disclaimer Dialog -->
     <el-dialog v-model="showDisclaimer" title="⚠️ 免责声明" width="500px" :close-on-click-modal="false" :close-on-press-escape="false" :show-close="false">
       <div style="line-height:1.8;color:var(--text-primary)">
-        <p>欢迎使用 <b>NetScan Pro v1.0.0</b></p>
+        <p>欢迎使用 <b>NetScan Pro v2.0.0</b></p>
         <p style="margin-top:12px">本工具仅用于<b>合法授权</b>的安全测试和渗透测试。使用本工具进行未经授权的网络扫描、漏洞检测或任何非法活动，后果由使用者自行承担。</p>
         <p style="margin-top:12px">使用前请确保已获得目标系统所有者的<b>书面授权</b>。</p>
         <div style="margin-top:16px;padding:12px;background:var(--bg-tertiary);border-radius:6px;font-size:13px">
@@ -51,7 +51,7 @@
           </div>
         </div>
         <div class="header-right">
-          <span style="font-size:12px;color:var(--text-muted)">v1.0.0</span>
+          <span style="font-size:12px;color:var(--text-muted)">v2.0.0</span>
           <el-tooltip content="切换主题">
             <el-button :icon="store.theme === 'dark' ? 'Sunny' : 'Moon'" circle size="small" @click="store.toggleTheme" />
           </el-tooltip>

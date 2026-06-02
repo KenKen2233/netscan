@@ -17,7 +17,7 @@ func main() {
 	application := app.New()
 
 	err := wails.Run(&options.App{
-		Title:     "NetScan Pro v1.0.0 - Author: A_Kanaki_1",
+		Title:     "NetScan Pro v2.0.0 - Author: A_Kanaki_1",
 		Width:     1400,
 		Height:    900,
 		MinWidth:  1024,

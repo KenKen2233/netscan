@@ -3,8 +3,12 @@ package scanner
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"strings"
+	"sync"
+	"time"
 )
 
 // OsintResult represents OSINT collection result
@@ -16,15 +20,21 @@ type OsintResult struct {
 
 // OsintConfig configures OSINT collection
 type OsintConfig struct {
-	Target  string
-	Modules []string
+	Target     string
+	Modules    []string
+	OnProgress func(completed, total int)
+	IsStopped  func() bool
 }
 
 // OsintCollect performs OSINT collection
 func OsintCollect(cfg OsintConfig) []OsintResult {
 	var results []OsintResult
+	total := len(cfg.Modules)
 
-	for _, mod := range cfg.Modules {
+	for i, mod := range cfg.Modules {
+		if cfg.IsStopped != nil && cfg.IsStopped() {
+			break
+		}
 		switch mod {
 		case "dns":
 			results = append(results, collectDNS(cfg.Target))
@@ -32,8 +42,19 @@ func OsintCollect(cfg OsintConfig) []OsintResult {
 			results = append(results, collectWhois(cfg.Target))
 		case "subdomain":
 			results = append(results, collectSubdomains(cfg.Target))
+		case "crtsh":
+			results = append(results, collectCrtSh(cfg.Target))
 		case "ipinfo":
 			results = append(results, collectIPInfo(cfg.Target))
+		case "ssl":
+			results = append(results, collectSSL(cfg.Target))
+		case "subdomain_brute":
+			results = append(results, collectSubdomainBrute(cfg.Target))
+		case "shodan":
+			results = append(results, collectShodan(cfg.Target))
+		}
+		if cfg.OnProgress != nil {
+			cfg.OnProgress(i+1, total)
 		}
 	}
 	return results
@@ -82,7 +103,6 @@ func collectDNS(target string) OsintResult {
 }
 
 func collectWhois(target string) OsintResult {
-	// Basic WHOIS via DNS lookup
 	data := map[string]interface{}{
 		"domain": target,
 	}
@@ -91,11 +111,47 @@ func collectWhois(target string) OsintResult {
 	ips, err := net.LookupHost(target)
 	if err == nil && len(ips) > 0 {
 		data["ip"] = ips[0]
-		// Try reverse DNS
 		names, _ := net.LookupAddr(ips[0])
 		if len(names) > 0 {
 			data["reverse_dns"] = names[0]
 		}
+	}
+
+	// Real WHOIS via TCP
+	whoisResult, err := WhoisLookup(target)
+	if err == nil && whoisResult != "" {
+		// Parse key fields from WHOIS response
+		lines := strings.Split(whoisResult, "\n")
+		parsed := make(map[string]string)
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "%") || strings.HasPrefix(line, "#") {
+				continue
+			}
+			if idx := strings.Index(line, ":"); idx > 0 {
+				key := strings.TrimSpace(line[:idx])
+				val := strings.TrimSpace(line[idx+1:])
+				if val != "" {
+					keyLower := strings.ToLower(key)
+					switch {
+					case strings.Contains(keyLower, "registrar"):
+						parsed["registrar"] = val
+					case strings.Contains(keyLower, "creation"):
+						parsed["creation_date"] = val
+					case strings.Contains(keyLower, "expir"):
+						parsed["expiry_date"] = val
+					case strings.Contains(keyLower, "name server"):
+						parsed["name_servers"] += val + ", "
+					case strings.Contains(keyLower, "updated"):
+						parsed["updated_date"] = val
+					}
+				}
+			}
+		}
+		data["whois_parsed"] = parsed
+		data["whois_raw"] = whoisResult[:min(len(whoisResult), 2000)] // truncate
+	} else if err != nil {
+		data["whois_error"] = err.Error()
 	}
 
 	jsonData, _ := json.Marshal(data)
@@ -169,4 +225,145 @@ func collectIPInfo(target string) OsintResult {
 
 	jsonData, _ := json.Marshal(data)
 	return OsintResult{Module: "ipinfo", Target: target, Data: string(jsonData)}
+}
+
+func collectCrtSh(target string) OsintResult {
+	data := map[string]interface{}{
+		"domain": target,
+	}
+
+	subdomains, err := QueryCrtSh(target)
+	if err != nil {
+		data["error"] = err.Error()
+	} else {
+		data["subdomains"] = subdomains
+		data["total"] = len(subdomains)
+	}
+
+	jsonData, _ := json.Marshal(data)
+	return OsintResult{Module: "crtsh", Target: target, Data: string(jsonData)}
+}
+
+// collectSSL collects SSL certificate information
+func collectSSL(target string) OsintResult {
+	data := map[string]interface{}{"domain": target}
+
+	info, err := ParseSSLCertificate(target)
+	if err != nil {
+		data["error"] = err.Error()
+	} else {
+		data["subject"] = info.Subject
+		data["issuer"] = info.Issuer
+		data["not_before"] = info.NotBefore
+		data["not_after"] = info.NotAfter
+		data["sans"] = info.SANs
+		data["is_valid"] = info.IsValid
+		data["days_left"] = info.DaysLeft
+		data["serial_number"] = info.SerialNumber
+	}
+
+	jsonData, _ := json.Marshal(data)
+	return OsintResult{Module: "ssl", Target: target, Data: string(jsonData)}
+}
+
+// collectSubdomainBrute performs subdomain dictionary brute force
+func collectSubdomainBrute(target string) OsintResult {
+	data := map[string]interface{}{"domain": target}
+
+	var found []map[string]string
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 100)
+
+	for _, word := range DefaultSubdomainWordlist {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(w string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			fqdn := w + "." + target
+			ips, err := net.LookupHost(fqdn)
+			if err == nil && len(ips) > 0 {
+				mu.Lock()
+				found = append(found, map[string]string{"domain": fqdn, "ip": strings.Join(ips, ", ")})
+				mu.Unlock()
+			}
+		}(word)
+	}
+	wg.Wait()
+
+	data["subdomains"] = found
+	data["total"] = len(found)
+	data["wordlist_size"] = len(DefaultSubdomainWordlist)
+
+	jsonData, _ := json.Marshal(data)
+	return OsintResult{Module: "subdomain_brute", Target: target, Data: string(jsonData)}
+}
+
+// collectShodan queries Shodan for host information
+func collectShodan(target string) OsintResult {
+	data := map[string]interface{}{"target": target}
+
+	// Resolve IP first
+	ips, err := net.LookupHost(target)
+	if err != nil || len(ips) == 0 {
+		data["error"] = "无法解析域名"
+		jsonData, _ := json.Marshal(data)
+		return OsintResult{Module: "shodan", Target: target, Data: string(jsonData)}
+	}
+
+	ip := ips[0]
+	data["ip"] = ip
+
+	result, err := ShodanLookup(ip)
+	if err != nil {
+		data["error"] = err.Error()
+	} else {
+		data["ports"] = result.Ports
+		data["os"] = result.OS
+		data["org"] = result.Org
+		data["isp"] = result.ISP
+		data["hostnames"] = result.Hostnames
+		data["vulns"] = result.Vulns
+	}
+
+	jsonData, _ := json.Marshal(data)
+	return OsintResult{Module: "shodan", Target: target, Data: string(jsonData)}
+}
+
+// QueryCrtSh queries crt.sh certificate transparency logs
+func QueryCrtSh(domain string) ([]string, error) {
+	url := fmt.Sprintf("https://crt.sh/?q=%%25.%s&output=json", domain)
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("crt.sh query failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	var entries []struct {
+		Name string `json:"name_value"`
+	}
+	if err := json.Unmarshal(body, &entries); err != nil {
+		return nil, fmt.Errorf("parse crt.sh response: %w", err)
+	}
+
+	seen := make(map[string]bool)
+	var results []string
+	for _, e := range entries {
+		for _, name := range strings.Split(e.Name, "\n") {
+			name = strings.TrimSpace(name)
+			name = strings.TrimPrefix(name, "*.")
+			if name != "" && !seen[name] && strings.HasSuffix(name, domain) {
+				seen[name] = true
+				results = append(results, name)
+			}
+		}
+	}
+	return results, nil
 }

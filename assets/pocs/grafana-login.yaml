@@ -1,0 +1,19 @@
+id: grafana-login
+info:
+  name: Grafana Login Page
+  author: netscan
+  severity: medium
+  tags:
+    - grafana
+    - dashboard
+    - exposure
+
+requests:
+  - method: GET
+    path: /login
+    matchers:
+      - type: word
+        words: ["Grafana"]
+        part: body
+      - type: status
+        status: [200]

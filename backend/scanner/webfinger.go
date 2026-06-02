@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"regexp"
 	"strings"
@@ -128,13 +129,14 @@ func WebFinger(cfg WebFingerConfig) []WebFingerResult {
 	return results
 }
 
-func fingerURL(client *http.Client, url string) WebFingerResult {
-	result := WebFingerResult{URL: url}
+func fingerURL(client *http.Client, rawURL string) WebFingerResult {
+	result := WebFingerResult{URL: rawURL}
 
-	if !strings.HasPrefix(url, "http") {
-		url = "http://" + url
-		result.URL = url
+	if !strings.HasPrefix(rawURL, "http") {
+		rawURL = "http://" + rawURL
 	}
+	result.URL = rawURL
+	url := rawURL
 
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
@@ -152,6 +154,14 @@ func fingerURL(client *http.Client, url string) WebFingerResult {
 	result.StatusCode = resp.StatusCode
 	result.Server = resp.Header.Get("Server")
 
+	// Update URL if redirected (e.g., http -> https)
+	if resp.Request != nil && resp.Request.URL != nil {
+		finalURL := resp.Request.URL.String()
+		if finalURL != url && strings.HasPrefix(finalURL, "http") {
+			result.URL = finalURL
+		}
+	}
+
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
 	bodyStr := string(body)
 
@@ -160,9 +170,10 @@ func fingerURL(client *http.Client, url string) WebFingerResult {
 		result.Title = strings.TrimSpace(m[1])
 	}
 
-	// Detect CMS and frameworks
+	// Detect CMS and frameworks (built-in + extended rules)
+	allRules := append(cmsSignatures, ExtendedFingerprintRules...)
 	lowerBody := strings.ToLower(bodyStr)
-	for _, sig := range cmsSignatures {
+	for _, sig := range allRules {
 		if sig.Header != "" {
 			headerVal := strings.ToLower(resp.Header.Get(sig.Header))
 			if strings.Contains(headerVal, strings.ToLower(sig.Pattern)) {
@@ -224,4 +235,9 @@ func ExtractTitle(body string) string {
 func FormatWebFingerResult(r WebFingerResult) string {
 	return fmt.Sprintf("[%d] %s | %s | %s | %s",
 		r.StatusCode, r.URL, r.Server, r.CMS, r.Title)
+}
+
+// ValidateIPAddress checks if a string is a valid IP address
+func ValidateIPAddress(ip string) bool {
+	return net.ParseIP(ip) != nil
 }

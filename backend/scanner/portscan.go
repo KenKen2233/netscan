@@ -89,11 +89,13 @@ func PortScan(cfg PortScanConfig) []PortScanResult {
 				elapsed := time.Since(start).Milliseconds()
 
 				if err == nil {
+					version := grabBanner(conn, port, cfg.Timeout)
 					conn.Close()
 					svc := CommonPorts[port]
 					result := PortScanResult{
 						IP: ip, Port: port, Protocol: cfg.Mode,
 						Service: svc, State: "open", ResponseTime: elapsed,
+						Version: version,
 					}
 					mu.Lock()
 					results = append(results, result)
@@ -242,4 +244,109 @@ func ParsePorts(portStr string) []int {
 		}
 	}
 	return ports
+}
+
+// HTTPCapablePorts defines ports that serve HTTP/HTTPS content
+var HTTPCapablePorts = map[int]bool{
+	80: true, 443: true, 8080: true, 8443: true, 8000: true, 8001: true,
+	8008: true, 8009: true, 8888: true, 9000: true, 9001: true, 9200: true,
+	9443: true, 3000: true, 4443: true, 5000: true, 7443: true, 8081: true,
+	8082: true, 8083: true, 8084: true, 8085: true, 9080: true,
+	10000: true, 2087: true, 2083: true, 2053: true, 2096: true,
+}
+
+// GetProtocolAndURL returns the protocol and a clickable URL ONLY for HTTP/HTTPS ports.
+// Returns empty url for non-HTTP services (SSH, FTP, SMTP, POP3, databases, etc.)
+func GetProtocolAndURL(ip string, port int, service string) (protocol string, url string) {
+	svc := strings.ToLower(service)
+
+	// Check if it's an HTTPS service
+	isHTTPS := port == 443 || port == 8443 || port == 9443 || port == 4443 || port == 7443 ||
+		strings.Contains(svc, "https") || strings.Contains(svc, "ssl")
+
+	// Check if it's an HTTP service
+	isHTTP := HTTPCapablePorts[port] || strings.Contains(svc, "http")
+
+	if isHTTPS {
+		protocol = "https"
+		url = "https://" + ip + ":" + strconv.Itoa(port)
+		return
+	}
+
+	if isHTTP {
+		protocol = "http"
+		url = "http://" + ip + ":" + strconv.Itoa(port)
+		return
+	}
+
+	// Non-HTTP services: return protocol name but NO url
+	protocol = strings.ToLower(CommonPorts[port])
+	if protocol == "" {
+		protocol = "tcp"
+	}
+	url = ""
+	return
+}
+
+// IsHTTPPort checks if a port serves HTTP/HTTPS content
+func IsHTTPPort(port int, service string) bool {
+	svc := strings.ToLower(service)
+	return HTTPCapablePorts[port] || strings.Contains(svc, "http") || strings.Contains(svc, "https")
+}
+
+// QuickProbe does a quick TCP connect check to verify the port is still open
+func QuickProbe(ip string, port int) bool {
+	addr := fmt.Sprintf("%s:%d", ip, port)
+	conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
+}
+
+// grabBanner reads the service banner from an open connection
+func grabBanner(conn net.Conn, port int, timeout int) string {
+	conn.SetReadDeadline(time.Now().Add(time.Duration(timeout) * time.Millisecond))
+
+	// For some services, we need to send a probe first
+	switch port {
+	case 80, 8080, 8000, 8001, 8443, 8888, 9000, 9200:
+		conn.Write([]byte("HEAD / HTTP/1.0\r\nHost: " + conn.RemoteAddr().String() + "\r\n\r\n"))
+	case 22:
+		// SSH sends banner主动
+	case 21:
+		// FTP sends banner主动
+	case 25, 587:
+		// SMTP sends banner主动
+	case 110:
+		// POP3 sends banner主动
+	case 143:
+		// IMAP sends banner主动
+	case 3306:
+		// MySQL sends handshake主动
+	case 6379:
+		conn.Write([]byte("INFO\r\n"))
+	case 5432:
+		conn.Write([]byte("\x00\x00\x00\x08\x04\xd2\x16/"))
+	case 27017:
+		// MongoDB needs OP_MSG, skip
+	}
+
+	buf := make([]byte, 1024)
+	n, err := conn.Read(buf)
+	if err != nil || n == 0 {
+		return ""
+	}
+
+	banner := strings.TrimSpace(string(buf[:n]))
+	// Clean up banner - take first line only
+	if idx := strings.IndexAny(banner, "\r\n"); idx > 0 {
+		banner = banner[:idx]
+	}
+	// Truncate long banners
+	if len(banner) > 128 {
+		banner = banner[:128]
+	}
+	return banner
 }

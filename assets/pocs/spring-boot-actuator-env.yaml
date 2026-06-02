@@ -1,0 +1,28 @@
+id: spring-boot-actuator-env
+info:
+  name: Spring Boot Actuator Env Exposure
+  author: netscan
+  severity: critical
+  cve: CVE-2022-22947
+  tags:
+    - spring
+    - actuator
+    - env
+    - exposure
+  reference:
+    - https://spring.io/blog/2022/03/31/spring-framework-rce-vulnerability
+
+requests:
+  - method: GET
+    path: /actuator/env
+    follow_redirect: true
+    matchers:
+      - type: word
+        condition: and
+        words:
+          - "activeProfiles"
+          - "propertySources"
+        part: body
+      - type: status
+        status:
+          - 200

@@ -1,0 +1,19 @@
+id: jenkins-unauth
+info:
+  name: Jenkins Unauthorized Access
+  author: netscan
+  severity: high
+  tags:
+    - jenkins
+    - ci
+    - unauthorized
+
+requests:
+  - method: GET
+    path: /login
+    matchers:
+      - type: word
+        words: ["Jenkins"]
+        part: body
+      - type: status
+        status: [200]
